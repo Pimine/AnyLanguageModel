@@ -5,6 +5,11 @@
 
     import JSONSchema
 
+    #if canImport(ImageIO)
+        import CoreGraphics
+        import ImageIO
+    #endif
+
     /// A language model that uses Apple Intelligence.
     ///
     /// Use this model to generate text using on-device language models provided by Apple.
@@ -529,6 +534,27 @@
         }
     }
 
+    #if canImport(ImageIO)
+        @available(macOS 27.0, iOS 27.0, watchOS 27.0, visionOS 27.0, *)
+        @available(tvOS, unavailable)
+        extension FoundationModels.Transcript.ImageAttachment {
+            internal init?(_ segment: AnyLanguageModel.Transcript.ImageSegment) {
+                switch segment.source {
+                case .url(let url):
+                    self.init(imageURL: url)
+                case .data(let data, _):
+                    guard
+                        let source = CGImageSourceCreateWithData(data as CFData, nil),
+                        let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+                    else {
+                        return nil
+                    }
+                    self.init(cgImage)
+                }
+            }
+        }
+    #endif
+
     @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
     extension Tool {
         fileprivate func callFunction(arguments: FoundationModels.GeneratedContent) async throws
@@ -754,8 +780,21 @@
                             content: fmContent
                         )
                     )
-                case .image:
-                    // FoundationModels Transcript does not support image segments
+                case .image(let imageSegment):
+                    #if canImport(ImageIO)
+                        // FoundationModels Transcript supports image attachments starting with OS 27.
+                        if #available(macOS 27.0, iOS 27.0, watchOS 27.0, visionOS 27.0, *),
+                            let attachment = FoundationModels.Transcript.ImageAttachment(imageSegment)
+                        {
+                            return .attachment(
+                                .init(
+                                    id: imageSegment.id,
+                                    content: .image(attachment)
+                                )
+                            )
+                        }
+                    #endif
+                    // FoundationModels Transcript does not support image segments before OS 27
                     return nil
                 }
             }
