@@ -266,9 +266,11 @@ extension Array: Generable where Element: Generable {
             minItems: nil,
             maxItems: nil
         )
+        // Propagate the element's $defs so nested generable types stay resolvable.
         return GenerationSchema.primitive(
             [Element].self,
-            node: .array(arrayNode)
+            node: .array(arrayNode),
+            defs: elementSchema.defs
         )
     }
 }

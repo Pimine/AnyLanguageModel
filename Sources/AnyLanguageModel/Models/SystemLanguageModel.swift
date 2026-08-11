@@ -644,7 +644,10 @@
                 ?? FoundationModels.DynamicGenerationSchema(type: String.self)
             return .init(arrayOf: itemsSchema, minimumElements: minItems, maximumElements: maxItems)
 
-        case .reference(let name):
+        case .reference(let ref):
+            // `$ref` carries a JSON pointer like "#/$defs/TypeName", while
+            // dependencies are registered under the bare definition name.
+            let name = ref.components(separatedBy: "/").last ?? ref
             return .init(referenceTo: name)
 
         case .allOf, .oneOf, .not, .null, .empty, .any:
