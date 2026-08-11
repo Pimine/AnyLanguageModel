@@ -923,7 +923,7 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
                 nonisolated public static var generationSchema: GenerationSchema {
                     return GenerationSchema(
                         type: Self.self,
-                        description: \(description.map { "\"\($0)\"" } ?? "\"Generated \(structName)\""),
+                        description: \(description.map { "\"\($0)\"" } ?? "nil"),
                         properties: [\(properties.isEmpty ? "" : "\n            \(propertySchemas)\n        ")]
                     )
                 }
@@ -1414,7 +1414,7 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
                     nonisolated public static var generationSchema: GenerationSchema {
                         return GenerationSchema(
                             type: Self.self,
-                            description: \(description.map { "\"\($0)\"" } ?? "\"Generated \(enumName)\""),
+                            description: \(description.map { "\"\($0)\"" } ?? "nil"),
                             properties: [
                                 \(caseProperty),
                                 \(valueProperty)
@@ -1431,7 +1431,7 @@ public struct GenerableMacro: MemberMacro, ExtensionMacro {
                     nonisolated public static var generationSchema: GenerationSchema {
                         return GenerationSchema(
                             type: Self.self,
-                            description: \(description.map { "\"\($0)\"" } ?? "\"Generated \(enumName)\""),
+                            description: \(description.map { "\"\($0)\"" } ?? "nil"),
                             anyOf: [\(caseNames)]
                         )
                     }
