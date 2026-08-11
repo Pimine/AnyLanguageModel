@@ -433,10 +433,14 @@ extension URLSession {
     }
 #endif
 
-enum URLSessionError: Error, CustomStringConvertible {
+enum URLSessionError: Error, CustomStringConvertible, LocalizedError {
     case invalidResponse
     case httpError(statusCode: Int, detail: String)
     case decodingError(detail: String)
+
+    var errorDescription: String? {
+        description
+    }
 
     var description: String {
         switch self {

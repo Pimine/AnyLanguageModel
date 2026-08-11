@@ -1931,20 +1931,44 @@ private extension GenerationSchema {
         var jsonSchemaValue = try JSONValue(jsonSchema)
 
         if case .object(var schemaObj) = jsonSchemaValue {
-            schemaObj["additionalProperties"] = .bool(false)
+            schemaObj = Self.applyStrictModeRequirements(to: schemaObj)
 
-            if case .object(let properties)? = schemaObj["properties"],
-                !properties.isEmpty
+            // The JSONSchema round-trip drops `$defs`, leaving any nested `$ref`
+            // dangling. Restore them from the original encoding, with the same
+            // strict-mode requirements applied to each definition.
+            if case .object(let rawSchema)? = try? JSONDecoder().decode(JSONValue.self, from: schemaData),
+                case .object(let defs)? = rawSchema["$defs"]
             {
-                // OpenAI strict mode requires all properties to be listed as required,
-                // even if the underlying schema marks them optional.
-                let allPropertyNames = Array(properties.keys).sorted()
-                schemaObj["required"] = .array(allPropertyNames.map { .string($0) })
+                var strictDefs: [String: JSONValue] = [:]
+                for (name, def) in defs {
+                    if case .object(let defObj) = def {
+                        strictDefs[name] = .object(Self.applyStrictModeRequirements(to: defObj))
+                    } else {
+                        strictDefs[name] = def
+                    }
+                }
+                schemaObj["$defs"] = .object(strictDefs)
             }
 
             jsonSchemaValue = .object(schemaObj)
         }
 
         return jsonSchemaValue
+    }
+
+    private static func applyStrictModeRequirements(to schema: [String: JSONValue]) -> [String: JSONValue] {
+        var schemaObj = schema
+        schemaObj["additionalProperties"] = .bool(false)
+
+        if case .object(let properties)? = schemaObj["properties"],
+            !properties.isEmpty
+        {
+            // OpenAI strict mode requires all properties to be listed as required,
+            // even if the underlying schema marks them optional.
+            let allPropertyNames = Array(properties.keys).sorted()
+            schemaObj["required"] = .array(allPropertyNames.map { .string($0) })
+        }
+
+        return schemaObj
     }
 }
