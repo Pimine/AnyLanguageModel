@@ -107,45 +107,15 @@
                     options: fmOptions
                 )
 
-                func finalize(content: Content) -> LanguageModelSession.Response<Content> {
-                    let normalizedRaw = content.generatedContent
-                    if let jsonValue = try? JSONValue(normalizedRaw),
-                        case .array(let values) = jsonValue,
-                        values.isEmpty,
-                        let placeholder = placeholderContent(for: type)
-                    {
-                        return LanguageModelSession.Response(
-                            content: placeholder.content,
-                            rawContent: placeholder.rawContent,
-                            transcriptEntries: []
-                        )
-                    }
-                    return LanguageModelSession.Response(
-                        content: content,
-                        rawContent: normalizedRaw,
-                        transcriptEntries: []
-                    )
-                }
-
-                do {
-                    let generatedContent = try GeneratedContent(fmResponse.content)
-                    let content = try type.init(generatedContent)
-
-                    return finalize(content: content)
-                } catch {
-                    // Attempt partial JSON decoding before surfacing an error.
-                    let decoder = PartialJSONDecoder()
-                    let jsonString = fmResponse.content.jsonString
-                    if let partialContent = try? decoder.decode(GeneratedContent.self, from: jsonString).value,
-                        let content = try? type.init(partialContent)
-                    {
-                        return finalize(content: content)
-                    }
-                    if let placeholder = placeholderContent(for: type) {
-                        return finalize(content: placeholder.content)
-                    }
-                    throw error
-                }
+                // Output that does not decode into `Content` throws, as in FoundationModels
+                // itself: callers rely on the error to fall back to another model.
+                let generatedContent = try GeneratedContent(fmResponse.content)
+                let content = try type.init(generatedContent)
+                return LanguageModelSession.Response(
+                    content: content,
+                    rawContent: content.generatedContent,
+                    transcriptEntries: []
+                )
             }
         }
 
@@ -392,10 +362,9 @@
             if let temperature = self.temperature {
                 options.temperature = temperature
             }
-
-            // Note: FoundationModels.GenerationOptions may not have all properties
-            // Only set those that are available
-
+            if let maximumResponseTokens = self.maximumResponseTokens {
+                options.maximumResponseTokens = maximumResponseTokens
+            }
             return options
         }
     }
@@ -823,20 +792,6 @@
         }
         if let value = try? Content(raw) {
             return (value.asPartiallyGenerated(), raw)
-        }
-        return nil
-    }
-
-    /// Generates minimal full content when structured output is missing or invalid.
-    private func placeholderContent<Content: Generable>(
-        for type: Content.Type
-    ) -> (content: Content, rawContent: GeneratedContent)? {
-        let schema = type.generationSchema
-        let resolved = schema.withResolvedRoot() ?? schema
-        let raw = placeholderGeneratedContent(from: resolved.root, defs: resolved.defs)
-
-        if let value = try? Content(raw) {
-            return (value, raw)
         }
         return nil
     }
