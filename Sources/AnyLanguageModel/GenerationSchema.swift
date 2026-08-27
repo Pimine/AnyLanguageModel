@@ -79,7 +79,7 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
                     keyedBy: GenerationSchema.DynamicCodingKey.self,
                     forKey: .properties
                 )
-                for (name, node) in obj.properties {
+                for (name, node) in obj.orderedProperties {
                     try propsContainer.encode(node, forKey: GenerationSchema.DynamicCodingKey(stringValue: name)!)
                 }
                 try container.encode(Array(obj.required), forKey: .required)
@@ -164,13 +164,20 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
                     forKey: .properties
                 )
                 var properties: [String: GenerationSchema.Node] = [:]
+                var order: [String] = []
                 for key in propsContainer.allKeys {
                     properties[key.stringValue] = try propsContainer.decode(GenerationSchema.Node.self, forKey: key)
+                    order.append(key.stringValue)
                 }
                 let requiredArray = try container.decodeIfPresent([String].self, forKey: .required) ?? []
                 let required = Set(requiredArray)
                 self = .object(
-                    GenerationSchema.ObjectNode(description: description, properties: properties, required: required)
+                    GenerationSchema.ObjectNode(
+                        description: description,
+                        properties: properties,
+                        required: required,
+                        order: order
+                    )
                 )
 
             case "array":
@@ -222,6 +229,14 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
         var description: String?
         var properties: [String: Node]
         var required: Set<String>
+        /// Property names in declaration order — the order models generate them in.
+        var order: [String]
+
+        var orderedProperties: [(name: String, node: Node)] {
+            let ordered = order.compactMap { name in properties[name].map { (name: name, node: $0) } }
+            let unordered = properties.keys.filter { !order.contains($0) }.sorted()
+            return ordered + unordered.compactMap { name in properties[name].map { (name: name, node: $0) } }
+        }
     }
 
     struct ArrayNode: Sendable, Codable {
@@ -316,7 +331,12 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
             }
         }
 
-        let objectNode = ObjectNode(description: description, properties: props, required: required)
+        let objectNode = ObjectNode(
+            description: description,
+            properties: props,
+            required: required,
+            order: properties.map(\.name)
+        )
         allDefs[typeName] = .object(objectNode)
 
         self.root = .ref(typeName)
@@ -480,7 +500,9 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
                     required.insert(prop.name)
                 }
             }
-            let node = Node.object(ObjectNode(description: desc, properties: props, required: required))
+            let node = Node.object(
+                ObjectNode(description: desc, properties: props, required: required, order: properties.map(\.name))
+            )
             if let name = name {
                 defs[name] = node
                 return .ref(name)

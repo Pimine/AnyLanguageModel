@@ -425,7 +425,7 @@ struct ConstrainedJSONGenerator<Backend: TokenBackend> {
     }
 
     private mutating func generateObject(_ node: GenerationSchema.ObjectNode) async throws -> String {
-        let keys = node.properties.keys.sorted()
+        let keys = node.orderedProperties.map(\.name)
         let includedKeys = keys.filter { shouldIncludeOptionalProperty($0, required: node.required) }
         var output = try await emit("{")
 

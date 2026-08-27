@@ -3,8 +3,6 @@
     import Foundation
     import PartialJSONDecoder
 
-    import JSONSchema
-
     #if canImport(ImageIO)
         import CoreGraphics
         import ImageIO
@@ -476,40 +474,9 @@
     @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
     extension FoundationModels.GenerationSchema {
         internal init(_ content: AnyLanguageModel.GenerationSchema) {
-            let resolvedSchema = content.withResolvedRoot() ?? content
-
-            // Convert the GenerationSchema into a DynamicGenerationSchema, preserving $defs
-            let rawParameters = try? JSONValue(resolvedSchema)
-
-            if case .object(var rootObject) = rawParameters {
-                // Extract dependencies from $defs and remove from the root payload
-                let defs = rootObject.removeValue(forKey: "$defs")?.objectValue ?? [:]
-
-                // Convert root schema
-                if let rootData = try? JSONEncoder().encode(JSONValue.object(rootObject)),
-                    let rootJSONSchema = try? JSONDecoder().decode(JSONSchema.self, from: rootData)
-                {
-                    let rootDynamicSchema = convertToDynamicSchema(rootJSONSchema)
-
-                    // Convert each dependency schema
-                    let dependencies: [FoundationModels.DynamicGenerationSchema] = defs.compactMap { name, value in
-                        guard
-                            let defData = try? JSONEncoder().encode(value),
-                            let defJSONSchema = try? JSONDecoder().decode(JSONSchema.self, from: defData)
-                        else {
-                            return nil
-                        }
-                        return convertToDynamicSchema(defJSONSchema, name: name)
-                    }
-
-                    if let schema = try? FoundationModels.GenerationSchema(
-                        root: rootDynamicSchema,
-                        dependencies: dependencies
-                    ) {
-                        self = schema
-                        return
-                    }
-                }
+            if let schema = try? DynamicSchemaConverter(defs: content.defs).schema(for: content.root) {
+                self = schema
+                return
             }
 
             // Fallback to a minimal string schema if conversion fails
@@ -565,123 +532,147 @@
         }
     }
 
+    /// Converts a schema node tree straight into FoundationModels dynamic schemas.
+    /// Properties keep their declaration order, only definitions the root reaches
+    /// become dependencies (so the root type is never duplicated) and type names
+    /// lose their module prefix — every extra token in the schema costs the
+    /// on-device model context and accuracy.
     @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
-    func convertToDynamicSchema(
-        _ jsonSchema: JSONSchema,
-        name: String? = nil
-    ) -> FoundationModels.DynamicGenerationSchema {
-        switch jsonSchema {
-        case .object(_, _, _, _, _, _, properties: let properties, required: let required, _):
-            let schemaProperties = properties.compactMap { key, value in
-                convertToProperty(key: key, schema: value, required: required)
-            }
-            return .init(name: name ?? "", description: jsonSchema.description, properties: schemaProperties)
+    struct DynamicSchemaConverter {
+        typealias Node = AnyLanguageModel.GenerationSchema.Node
 
-        case .string(_, _, _, _, _, _, _, _, pattern: let pattern, _):
-            if let values = jsonSchema.enum?.compactMap(\.stringValue), !values.isEmpty {
-                if let name {
-                    return .init(name: name, description: jsonSchema.description, anyOf: values)
-                }
-            }
+        let defs: [String: Node]
+        let names: [String: String]
 
-            var guides: [FoundationModels.GenerationGuide<String>] = []
-            if let values = jsonSchema.enum?.compactMap(\.stringValue), !values.isEmpty {
-                guides.append(.anyOf(values))
-            }
-            if let value = jsonSchema.const?.stringValue {
-                guides.append(.constant(value))
-            }
-            if let pattern, let regex = try? Regex(pattern) {
-                guides.append(.pattern(regex))
-            }
-            return .init(type: String.self, guides: guides)
-
-        case .integer(_, _, _, _, _, _, minimum: let minimum, maximum: let maximum, _, _, _):
-            if let enumValues = jsonSchema.enum {
-                let enumsSchema = enumValues.compactMap { convertConstToSchema($0) }
-                return .init(name: name ?? "", anyOf: enumsSchema)
-            }
-
-            var guides: [FoundationModels.GenerationGuide<Int>] = []
-            if let min = minimum {
-                guides.append(.minimum(min))
-            }
-            if let max = maximum {
-                guides.append(.maximum(max))
-            }
-            if let value = jsonSchema.const?.intValue {
-                guides.append(.range(value ... value))
-            }
-            return .init(type: Int.self, guides: guides)
-
-        case .number(_, _, _, _, _, _, minimum: let minimum, maximum: let maximum, _, _, _):
-            if let enumValues = jsonSchema.enum {
-                let enumsSchema = enumValues.compactMap { convertConstToSchema($0) }
-                return .init(name: name ?? "", anyOf: enumsSchema)
-            }
-
-            var guides: [FoundationModels.GenerationGuide<Double>] = []
-            if let min = minimum {
-                guides.append(.minimum(min))
-            }
-            if let max = maximum {
-                guides.append(.maximum(max))
-            }
-            if let value = jsonSchema.const?.doubleValue {
-                guides.append(.range(value ... value))
-            }
-            return .init(type: Double.self, guides: guides)
-
-        case .boolean:
-            return .init(type: Bool.self)
-
-        case .anyOf(let schemas):
-            return .init(name: name ?? "", anyOf: schemas.map { convertToDynamicSchema($0) })
-
-        case .array(_, _, _, _, _, _, items: let items, minItems: let minItems, maxItems: let maxItems, _):
-            let itemsSchema =
-                items.map { convertToDynamicSchema($0) }
-                ?? FoundationModels.DynamicGenerationSchema(type: String.self)
-            return .init(arrayOf: itemsSchema, minimumElements: minItems, maximumElements: maxItems)
-
-        case .reference(let ref):
-            // `$ref` carries a JSON pointer like "#/$defs/TypeName", while
-            // dependencies are registered under the bare definition name.
-            let name = ref.components(separatedBy: "/").last ?? ref
-            return .init(referenceTo: name)
-
-        case .allOf, .oneOf, .not, .null, .empty, .any:
-            return .init(type: String.self)
+        init(defs: [String: Node]) {
+            self.defs = defs
+            self.names = Self.shortNames(for: defs.keys)
         }
-    }
 
-    @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
-    func convertToProperty(
-        key: String,
-        schema: JSONSchema,
-        required: [String]
-    ) -> FoundationModels.DynamicGenerationSchema.Property {
-        .init(
-            name: key,
-            description: schema.description,
-            schema: convertToDynamicSchema(schema),
-            isOptional: !required.contains(key)
-        )
-    }
+        func schema(for root: Node) throws -> FoundationModels.GenerationSchema {
+            var referenced: Set<String> = []
+            var converted: Set<String> = []
+            let rootSchema: FoundationModels.DynamicGenerationSchema
+            if case .ref(let name) = root, let node = defs[name] {
+                converted.insert(name)
+                rootSchema = dynamicSchema(for: node, name: name, referenced: &referenced)
+            } else {
+                rootSchema = dynamicSchema(for: root, name: nil, referenced: &referenced)
+            }
 
-    /// Converts a JSON constant value to a DynamicGenerationSchema.
-    /// Only handles scalar types (int, double, string); returns nil for null, object, bool, and array.
-    @available(macOS 26.0, iOS 26.0, watchOS 26.0, tvOS 26.0, visionOS 26.0, *)
-    func convertConstToSchema(_ value: JSONValue) -> FoundationModels.DynamicGenerationSchema? {
-        switch value {
-        case .int(let intValue):
-            .init(type: Int.self, guides: [.range(intValue ... intValue)])
-        case .double(let doubleValue):
-            .init(type: Double.self, guides: [.range(doubleValue ... doubleValue)])
-        case .string(let stringValue):
-            .init(type: String.self, guides: [.constant(stringValue)])
-        case .null, .object, .bool, .array:
-            nil
+            var dependencies: [FoundationModels.DynamicGenerationSchema] = []
+            var pending = referenced.subtracting(converted)
+            while let name = pending.popFirst() {
+                converted.insert(name)
+                guard let node = defs[name] else { continue }
+                var nested: Set<String> = []
+                dependencies.append(dynamicSchema(for: node, name: name, referenced: &nested))
+                pending.formUnion(nested.subtracting(converted))
+            }
+            return try FoundationModels.GenerationSchema(root: rootSchema, dependencies: dependencies)
+        }
+
+        private func dynamicSchema(
+            for node: Node,
+            name: String?,
+            referenced: inout Set<String>
+        ) -> FoundationModels.DynamicGenerationSchema {
+            switch node {
+            case .object(let object):
+                let properties = object.orderedProperties.map { property in
+                    FoundationModels.DynamicGenerationSchema.Property(
+                        name: property.name,
+                        description: description(of: property.node),
+                        schema: dynamicSchema(for: property.node, name: nil, referenced: &referenced),
+                        isOptional: !object.required.contains(property.name)
+                    )
+                }
+                return .init(name: displayName(name), description: object.description, properties: properties)
+
+            case .array(let array):
+                return .init(
+                    arrayOf: dynamicSchema(for: array.items, name: nil, referenced: &referenced),
+                    minimumElements: array.minItems,
+                    maximumElements: array.maxItems
+                )
+
+            case .string(let string):
+                if let choices = string.enumChoices, !choices.isEmpty {
+                    if let name {
+                        return .init(name: displayName(name), description: string.description, anyOf: choices)
+                    }
+                    return .init(type: String.self, guides: [.anyOf(choices)])
+                }
+                var guides: [FoundationModels.GenerationGuide<String>] = []
+                if let pattern = string.pattern, let regex = try? Regex(pattern) {
+                    guides.append(.pattern(regex))
+                }
+                return .init(type: String.self, guides: guides)
+
+            case .number(let number):
+                if number.integerOnly {
+                    var guides: [FoundationModels.GenerationGuide<Int>] = []
+                    if let minimum = number.minimum { guides.append(.minimum(Int(minimum))) }
+                    if let maximum = number.maximum { guides.append(.maximum(Int(maximum))) }
+                    return .init(type: Int.self, guides: guides)
+                }
+                var guides: [FoundationModels.GenerationGuide<Double>] = []
+                if let minimum = number.minimum { guides.append(.minimum(minimum)) }
+                if let maximum = number.maximum { guides.append(.maximum(maximum)) }
+                return .init(type: Double.self, guides: guides)
+
+            case .boolean:
+                return .init(type: Bool.self)
+
+            case .anyOf(let nodes):
+                return .init(
+                    name: displayName(name),
+                    description: nil,
+                    anyOf: nodes.map { dynamicSchema(for: $0, name: nil, referenced: &referenced) }
+                )
+
+            case .ref(let refName):
+                // FoundationModels can only name objects, unions and string enums;
+                // any other definition is inlined where it is used.
+                if let node = defs[refName], !Self.isNameable(node) {
+                    return dynamicSchema(for: node, name: nil, referenced: &referenced)
+                }
+                referenced.insert(refName)
+                return .init(referenceTo: displayName(refName))
+            }
+        }
+
+        private func description(of node: Node) -> String? {
+            switch node {
+            case .object(let object): object.description
+            case .array(let array): array.description
+            case .string(let string): string.description
+            case .number(let number): number.description
+            case .boolean, .anyOf, .ref: nil
+            }
+        }
+
+        private func displayName(_ name: String?) -> String {
+            guard let name else { return "" }
+            return names[name] ?? name
+        }
+
+        private static func isNameable(_ node: Node) -> Bool {
+            switch node {
+            case .object, .anyOf: true
+            case .string(let string): string.enumChoices?.isEmpty == false
+            case .array, .number, .boolean, .ref: false
+            }
+        }
+
+        /// Drops the module prefix of `String(reflecting:)` type names unless that
+        /// would make two definitions collide.
+        private static func shortNames(for names: some Collection<String>) -> [String: String] {
+            let short = Dictionary(uniqueKeysWithValues: names.map { name -> (String, String) in
+                let components = name.split(separator: ".", maxSplits: 1)
+                return (name, components.count == 2 ? String(components[1]) : name)
+            })
+            return Set(short.values).count == short.count ? short : [:]
         }
     }
 
@@ -858,7 +849,7 @@
         switch node {
         case .object(let obj):
             var properties: Array<(String, GeneratedContent)> = []
-            for (key, value) in obj.properties {
+            for (key, value) in obj.orderedProperties {
                 let generated = placeholderGeneratedContent(from: value, defs: defs)
                 properties.append((key, generated))
             }
