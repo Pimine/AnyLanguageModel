@@ -1107,15 +1107,25 @@ private enum Responses {
 
             case .system:
                 let systemMessage = msg
+                let text: String
                 switch systemMessage.content {
-                case .text(let text):
-                    body["instructions"] = .string(text)
+                case .text(let value):
+                    text = value
                 case .blocks(let blocks):
                     // Concatenate text blocks for instructions; ignore images
-                    let text = blocks.compactMap { if case .text(let t) = $0 { return t } else { return nil } }.joined(
+                    text = blocks.compactMap { if case .text(let t) = $0 { return t } else { return nil } }.joined(
                         separator: "\n"
                     )
-                    if !text.isEmpty { body["instructions"] = .string(text) }
+                }
+                if !text.isEmpty {
+                    // Separate instruction blocks arrive as separate system messages, but
+                    // the Responses API takes a single `instructions` field: join them
+                    // instead of letting the last block replace the earlier ones.
+                    if case .string(let existing)? = body["instructions"], !existing.isEmpty {
+                        body["instructions"] = .string(existing + "\n\n" + text)
+                    } else {
+                        body["instructions"] = .string(text)
+                    }
                 }
 
             case .assistant:

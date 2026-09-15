@@ -53,6 +53,46 @@ public final class LanguageModelSession: @unchecked Sendable {
         self.init(model: model, tools: tools, instructions: instructions, transcript: Transcript())
     }
 
+    /// Creates a session whose instructions are sent as separate blocks.
+    ///
+    /// Providers that support several system messages send one per block; the rest join
+    /// them. A short directive kept in its own block is followed far more reliably than
+    /// the same sentence appended to the end of a long prompt.
+    ///
+    /// - Note: This initializer is exclusive to AnyLanguageModel and using it means your
+    ///   code is no longer drop-in compatible with the Foundation Models framework.
+    public convenience init(
+        model: any LanguageModel,
+        tools: [any Tool] = [],
+        instructions: [Instructions]
+    ) {
+        // Tool schemas belong to the first block: providers read them from the
+        // instructions entry that opens the transcript.
+        let toolDefinitions =
+            tools
+            .filter(\.includesSchemaInInstructions)
+            .map { Transcript.ToolDefinition(tool: $0) }
+
+        let entries = instructions.enumerated().map { index, block in
+            Transcript.Entry.instructions(
+                Transcript.Instructions(
+                    segments: [.text(.init(content: block.description))],
+                    toolDefinitions: index == 0 ? toolDefinitions : []
+                )
+            )
+        }
+
+        self.init(model: model, tools: tools, instructions: nil, transcript: Transcript(entries: entries))
+    }
+
+    public convenience init(
+        model: any LanguageModel,
+        tools: [any Tool] = [],
+        instructions: [String]
+    ) {
+        self.init(model: model, tools: tools, instructions: instructions.map { Instructions($0) })
+    }
+
     public convenience init(
         model: any LanguageModel,
         tools: [any Tool] = [],
