@@ -470,6 +470,8 @@ public struct OpenAILanguageModel: LanguageModel {
 
         var entries: [Transcript.Entry] = []
         var text = ""
+        var additionalTexts: [String] = []
+        var usage: LanguageModelSession.TokenUsage?
         var messages = messages
 
         // Loop until no more tool calls
@@ -493,6 +495,11 @@ public struct OpenAILanguageModel: LanguageModel {
                 ],
                 body: body
             )
+
+            // Every round trip of a tool-call loop is billed, so the usage adds up.
+            if let reported = resp.usage?.tokenUsage {
+                usage = usage.map { $0 + reported } ?? reported
+            }
 
             guard let choice = resp.choices.first else {
                 throw OpenAILanguageModelError.noResponseGenerated
@@ -546,6 +553,10 @@ public struct OpenAILanguageModel: LanguageModel {
             }
 
             text = choice.message.content ?? ""
+            // Further choices of an `n > 1` request; a refused one is dropped.
+            additionalTexts = resp.choices.dropFirst().compactMap {
+                $0.message.refusal == nil ? $0.message.content : nil
+            }
             break
         }
 
@@ -553,16 +564,26 @@ public struct OpenAILanguageModel: LanguageModel {
             return LanguageModelSession.Response(
                 content: text as! Content,
                 rawContent: GeneratedContent(text),
-                transcriptEntries: ArraySlice(entries)
+                transcriptEntries: ArraySlice(entries),
+                additionalChoices: additionalTexts as! [Content],
+                usage: usage
             )
         }
 
         let generatedContent = try GeneratedContent(json: text)
         let content = try type.init(generatedContent)
+        // A truncated or malformed extra choice is dropped rather than failing the
+        // whole request: the first choice keeps the single-completion semantics.
+        let additionalChoices = additionalTexts.compactMap { choiceText -> Content? in
+            guard let choiceContent = try? GeneratedContent(json: choiceText) else { return nil }
+            return try? type.init(choiceContent)
+        }
         return LanguageModelSession.Response(
             content: content,
             rawContent: generatedContent,
-            transcriptEntries: ArraySlice(entries)
+            transcriptEntries: ArraySlice(entries),
+            additionalChoices: additionalChoices,
+            usage: usage
         )
     }
 
@@ -973,6 +994,35 @@ private enum ChatCompletions {
     struct Response: Decodable, Sendable {
         let id: String
         let choices: [Choice]
+        let usage: Usage?
+
+        struct Usage: Decodable, Sendable {
+            let promptTokens: Int
+            let completionTokens: Int
+            let promptTokensDetails: PromptTokensDetails?
+
+            struct PromptTokensDetails: Decodable, Sendable {
+                let cachedTokens: Int?
+
+                private enum CodingKeys: String, CodingKey {
+                    case cachedTokens = "cached_tokens"
+                }
+            }
+
+            private enum CodingKeys: String, CodingKey {
+                case promptTokens = "prompt_tokens"
+                case completionTokens = "completion_tokens"
+                case promptTokensDetails = "prompt_tokens_details"
+            }
+
+            var tokenUsage: LanguageModelSession.TokenUsage {
+                LanguageModelSession.TokenUsage(
+                    inputTokens: promptTokens,
+                    cachedInputTokens: promptTokensDetails?.cachedTokens ?? 0,
+                    outputTokens: completionTokens
+                )
+            }
+        }
 
         struct Choice: Codable, Sendable {
             let message: Message

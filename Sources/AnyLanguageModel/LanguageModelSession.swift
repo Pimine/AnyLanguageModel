@@ -222,24 +222,60 @@ public final class LanguageModelSession: @unchecked Sendable {
         return ResponseStream(stream: relay)
     }
 
+    /// The tokens a request was billed for, as the provider reported them.
+    public struct TokenUsage: Sendable, Equatable {
+        public let inputTokens: Int
+        /// The part of `inputTokens` served from the provider's prompt cache at the cached rate.
+        public let cachedInputTokens: Int
+        /// All generated tokens, across every choice of a multi-completion request.
+        public let outputTokens: Int
+
+        public init(inputTokens: Int, cachedInputTokens: Int = 0, outputTokens: Int) {
+            self.inputTokens = inputTokens
+            self.cachedInputTokens = cachedInputTokens
+            self.outputTokens = outputTokens
+        }
+
+        /// The usage of several round trips of one response, e.g. a tool-call loop.
+        public static func + (lhs: TokenUsage, rhs: TokenUsage) -> TokenUsage {
+            TokenUsage(
+                inputTokens: lhs.inputTokens + rhs.inputTokens,
+                cachedInputTokens: lhs.cachedInputTokens + rhs.cachedInputTokens,
+                outputTokens: lhs.outputTokens + rhs.outputTokens
+            )
+        }
+    }
+
     public struct Response<Content>: Sendable where Content: Generable, Content: Sendable {
         public let content: Content
         public let rawContent: GeneratedContent
         public let transcriptEntries: ArraySlice<Transcript.Entry>
+        /// The other completions of a request that asked for several (OpenAI `n`),
+        /// in the order the model returned them; empty for single-completion models.
+        /// Only `content` enters the transcript.
+        public let additionalChoices: [Content]
+        /// The billed tokens; nil for providers that report none.
+        public let usage: TokenUsage?
 
         /// Creates a response value from generated content and transcript entries.
         /// - Parameters:
         ///   - content: The decoded response content.
         ///   - rawContent: The raw content produced by the model.
         ///   - transcriptEntries: Transcript entries associated with the response.
+        ///   - additionalChoices: The decoded content of any further completions.
+        ///   - usage: The tokens the request was billed for.
         public init(
             content: Content,
             rawContent: GeneratedContent,
-            transcriptEntries: ArraySlice<Transcript.Entry>
+            transcriptEntries: ArraySlice<Transcript.Entry>,
+            additionalChoices: [Content] = [],
+            usage: TokenUsage? = nil
         ) {
             self.content = content
             self.rawContent = rawContent
             self.transcriptEntries = transcriptEntries
+            self.additionalChoices = additionalChoices
+            self.usage = usage
         }
     }
 
