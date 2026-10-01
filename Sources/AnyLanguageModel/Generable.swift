@@ -108,7 +108,7 @@ extension Bool: Generable {
     /// An instance of the generation schema.
     public static var generationSchema: GenerationSchema {
         // Bool is a primitive, create a simple schema
-        GenerationSchema.primitive(Bool.self, node: .boolean)
+        GenerationSchema.primitive(Bool.self, node: .boolean(GenerationSchema.BooleanNode(description: nil)))
     }
 
     /// Creates an instance with the content.

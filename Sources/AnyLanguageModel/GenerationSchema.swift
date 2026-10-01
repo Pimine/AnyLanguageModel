@@ -14,7 +14,7 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
         case array(ArrayNode)
         case string(StringNode)
         case number(NumberNode)
-        case boolean
+        case boolean(BooleanNode)
         case anyOf([Node])
         case ref(String)
 
@@ -22,8 +22,8 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
 
         static func == (lhs: GenerationSchema.Node, rhs: GenerationSchema.Node) -> Bool {
             switch (lhs, rhs) {
-            case (.boolean, .boolean):
-                return true
+            case (.boolean(let lhsBoolean), .boolean(let rhsBoolean)):
+                return lhsBoolean.description == rhsBoolean.description
             case (.ref(let lhsName), .ref(let rhsName)):
                 return lhsName == rhsName
             case (.string(let lhsString), .string(let rhsString)):
@@ -127,8 +127,11 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
                     try container.encode(max, forKey: .maximum)
                 }
 
-            case .boolean:
+            case .boolean(let boolean):
                 try container.encode("boolean", forKey: .type)
+                if let desc = boolean.description {
+                    try container.encode(desc, forKey: .description)
+                }
 
             case .anyOf(let nodes):
                 try container.encode(nodes, forKey: .anyOf)
@@ -213,7 +216,7 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
                 )
 
             case "boolean":
-                self = .boolean
+                self = .boolean(GenerationSchema.BooleanNode(description: description))
 
             default:
                 throw DecodingError.dataCorruptedError(
@@ -257,6 +260,10 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
         var minimum: Double?
         var maximum: Double?
         var integerOnly: Bool
+    }
+
+    struct BooleanNode: Sendable, Codable {
+        var description: String?
     }
 
     let root: Node
@@ -541,7 +548,7 @@ public struct GenerationSchema: Equatable, Codable, CustomDebugStringConvertible
         case .scalar(let scalar):
             switch scalar {
             case .bool:
-                return .boolean
+                return .boolean(BooleanNode(description: dynamicProp?.description))
             case .string:
                 return .string(StringNode(description: dynamicProp?.description, pattern: nil, enumChoices: nil))
             case .number:
@@ -754,7 +761,7 @@ extension GenerationSchema {
         ) -> (Node, [String: Node]) {
             // Check if it's a primitive type
             if type == Bool.self {
-                return (.boolean, [:])
+                return (.boolean(BooleanNode(description: description)), [:])
             } else if type == String.self {
                 return (.string(StringNode(description: description, pattern: nil, enumChoices: nil)), [:])
             } else if type == Int.self {

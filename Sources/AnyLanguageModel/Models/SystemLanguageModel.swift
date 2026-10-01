@@ -617,7 +617,8 @@
             case .array(let array): array.description
             case .string(let string): string.description
             case .number(let number): number.description
-            case .boolean, .anyOf, .ref: nil
+            case .boolean(let boolean): boolean.description
+            case .anyOf, .ref: nil
             }
         }
 
